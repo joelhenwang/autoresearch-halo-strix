@@ -11,8 +11,10 @@ Background processes (e.g., shell commands) are allowed.
 
 1. **Study experiment history**: Run `autostrix best 10` to see top performers. Run `autostrix history` to see all experiments.
 2. **Sample broadly**: Don't only study the best experiments. **Randomly pick 2-3 experiments that are NOT in the top 5** — read their HYPOTHESIS.md and RESULTS.md in `experiments/<name>/`. Look for near-misses, interesting failures, and unexplored directions.
-3. **Study available components**: Read `src/components/` to know what building blocks exist (attention variants, MLP types, normalization, position encodings, heads).
-4. **Brainstorm**: Think creatively. Consider:
+3. **Check the ideas bank**: Run `autostrix ideas` — the human may have left papers, URLs, or concepts for you to explore. Incorporate relevant ideas into your hypothesis.
+4. **Check suggestions**: Run `autostrix suggestions` — the human may have queued a specific experiment direction. **If there are pending suggestions, strongly prioritize the highest-priority one.** These are direct human input and should take precedence over your own brainstorming.
+5. **Study available components**: Read `src/components/` to know what building blocks exist (attention variants, MLP types, normalization, position encodings, heads).
+6. **Brainstorm**: Think creatively. Consider:
    - Architecture changes (different MLP, attention patterns, layer counts)
    - Optimizer tweaks (learning rates, schedules, weight decay)
    - Training dynamics (batch size, gradient accumulation)

@@ -62,6 +62,26 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         max_cycles: usize,
     },
+    /// Save an idea, paper, or URL to the ideas bank for the Researcher
+    Idea {
+        /// The idea text (paper title, URL, concept, etc.)
+        text: Vec<String>,
+        /// Tag/category (e.g., "paper", "architecture", "optimizer")
+        #[arg(long, short)]
+        tag: Option<String>,
+    },
+    /// List all saved ideas
+    Ideas,
+    /// Queue a human-directed experiment prompt for the Researcher
+    Suggest {
+        /// Description of the experiment you want tried
+        text: Vec<String>,
+        /// Priority (higher = tried sooner)
+        #[arg(long, short, default_value_t = 10)]
+        priority: i64,
+    },
+    /// List queued experiment suggestions
+    Suggestions,
 }
 
 // ---------------------------------------------------------------------------
@@ -516,7 +536,7 @@ const AGENTS: &[&str] = &["researcher", "planner", "engineer", "trainer", "repor
 
 fn allowed_tools_for_role(role: &str) -> &'static str {
     match role {
-        "researcher" => "Read,Bash(autostrix *),Bash(ls *),Glob,Grep,Write",
+        "researcher" => "Read,Bash(autostrix *),Bash(ls *),Bash(cat *),Glob,Grep,Write",
         "planner"    => "Read,Write,Glob,Grep",
         "engineer"   => "Read,Write,Edit,Bash(uv run *),Bash(python *),Glob,Grep",
         "trainer"    => "Read,Write,Bash(uv run *),Bash(grep *),Bash(tail *),Glob",
@@ -544,9 +564,12 @@ fn agent_prompt(role: &str, exp_dir: &str) -> String {
             "You are working on experiment folder: {exp_dir}\n\n\
              1. Run `autostrix best 10` and `autostrix history` to study past experiments.\n\
              2. Randomly pick 2-3 experiments that are NOT in the top 5 and read their HYPOTHESIS.md and RESULTS.md.\n\
-             3. Read `src/components/` files to know what building blocks are available.\n\
-             4. Write {exp_dir}/HYPOTHESIS.md following the schema at agents/schemas/HYPOTHESIS.md.\n\
-             5. Write {exp_dir}/REVIEW_researcher.md reviewing your session."
+             3. Run `autostrix ideas` to check if the human left any ideas, papers, or URLs for you to explore.\n\
+             4. Run `autostrix suggestions` to check if the human queued a specific experiment direction. \
+                If there are pending suggestions, strongly consider implementing the highest-priority one.\n\
+             5. Read `src/components/` files to know what building blocks are available.\n\
+             6. Write {exp_dir}/HYPOTHESIS.md following the schema at agents/schemas/HYPOTHESIS.md.\n\
+             7. Write {exp_dir}/REVIEW_researcher.md reviewing your session."
         ),
         "planner" => format!(
             "You are working on experiment folder: {exp_dir}\n\n\
@@ -672,7 +695,7 @@ fn verify_file_exists(path: &str) -> Result<(), String> {
     }
 }
 
-fn init_cycles_table(conn: &Connection) {
+fn init_all_tables(conn: &Connection) {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS cycles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -682,8 +705,23 @@ fn init_cycles_table(conn: &Connection) {
             finished_at TEXT,
             status TEXT NOT NULL DEFAULT 'running',
             agents_completed TEXT DEFAULT '[]'
+        );
+        CREATE TABLE IF NOT EXISTS ideas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            tag TEXT,
+            created_at TEXT NOT NULL,
+            used_in_cycle INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            priority INTEGER DEFAULT 10,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            used_in_cycle INTEGER
         );"
-    ).expect("Failed to create cycles table");
+    ).expect("Failed to create tables");
 }
 
 fn cmd_run_cycle(db_path: &PathBuf, experiment_name: &str) {
@@ -697,7 +735,7 @@ fn cmd_run_cycle(db_path: &PathBuf, experiment_name: &str) {
         eprintln!("Failed to open database: {e}");
         std::process::exit(1);
     });
-    init_cycles_table(&conn);
+    init_all_tables(&conn);
 
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
@@ -811,6 +849,113 @@ fn cmd_run_loop(db_path: &PathBuf, max_cycles: usize) {
 }
 
 // ---------------------------------------------------------------------------
+// Ideas bank & suggestions
+// ---------------------------------------------------------------------------
+
+fn cmd_idea(db_path: &PathBuf, text: &[String], tag: Option<&str>) {
+    let conn = open_db(db_path).expect("Failed to open database");
+    init_all_tables(&conn);
+    let text = text.join(" ");
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO ideas (text, tag, created_at) VALUES (?1, ?2, ?3)",
+        params![text, tag, now],
+    ).expect("Failed to insert idea");
+    let id: i64 = conn.last_insert_rowid();
+    let tag_str = tag.map(|t| format!(" [{}]", t.cyan())).unwrap_or_default();
+    println!("{} Idea #{id} saved{tag_str}", "OK".green().bold());
+    println!("   {text}");
+}
+
+fn cmd_ideas(db_path: &PathBuf) {
+    let conn = open_db(db_path).expect("Failed to open database");
+    init_all_tables(&conn);
+    let mut stmt = conn
+        .prepare("SELECT id, text, tag, created_at, used_in_cycle FROM ideas ORDER BY id DESC")
+        .expect("bad SQL");
+    let rows: Vec<(i64, String, Option<String>, String, Option<i64>)> = stmt
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+        })
+        .expect("query failed")
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if rows.is_empty() {
+        println!("{}", "No ideas saved yet. Use `autostrix idea <text>` to add one.".dimmed());
+        return;
+    }
+
+    println!("{} ({} total)\n", "Ideas Bank".bold(), rows.len());
+    for (id, text, tag, created_at, used) in &rows {
+        let tag_str = tag.as_ref().map(|t| format!(" [{}]", t.cyan())).unwrap_or_default();
+        let used_str = used.map(|c| format!(" (used in cycle #{c})").dimmed().to_string()).unwrap_or_default();
+        let date = fmt_started(&Some(created_at.clone()));
+        println!("  #{id}{tag_str} {date}{used_str}");
+        // Wrap long text
+        let display = if text.len() > 120 { format!("{}...", &text[..117]) } else { text.clone() };
+        println!("    {display}");
+        println!();
+    }
+}
+
+fn cmd_suggest(db_path: &PathBuf, text: &[String], priority: i64) {
+    let conn = open_db(db_path).expect("Failed to open database");
+    init_all_tables(&conn);
+    let text = text.join(" ");
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO suggestions (text, priority, created_at) VALUES (?1, ?2, ?3)",
+        params![text, priority, now],
+    ).expect("Failed to insert suggestion");
+    let id: i64 = conn.last_insert_rowid();
+    println!("{} Suggestion #{id} queued (priority: {priority})", "OK".green().bold());
+    println!("   {text}");
+}
+
+fn cmd_suggestions(db_path: &PathBuf) {
+    let conn = open_db(db_path).expect("Failed to open database");
+    init_all_tables(&conn);
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, text, priority, created_at, status, used_in_cycle \
+             FROM suggestions ORDER BY \
+             CASE WHEN status='pending' THEN 0 ELSE 1 END, priority DESC, id ASC"
+        )
+        .expect("bad SQL");
+    let rows: Vec<(i64, String, i64, String, String, Option<i64>)> = stmt
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+        })
+        .expect("query failed")
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if rows.is_empty() {
+        println!("{}", "No suggestions queued. Use `autostrix suggest <text>` to add one.".dimmed());
+        return;
+    }
+
+    let mut table = new_table();
+    table.set_header(vec!["ID", "Pri", "Status", "Description"]);
+    for (id, text, priority, _created, status, used) in &rows {
+        let status_display = match status.as_str() {
+            "pending" => "pending".yellow().to_string(),
+            "used" => format!("used (cycle #{})", used.unwrap_or(0)).green().to_string(),
+            other => other.to_string(),
+        };
+        let display = if text.len() > 80 { format!("{}...", &text[..77]) } else { text.clone() };
+        table.add_row(vec![
+            Cell::new(id).set_alignment(CellAlignment::Right),
+            Cell::new(priority).set_alignment(CellAlignment::Right),
+            Cell::new(status_display),
+            Cell::new(display),
+        ]);
+    }
+    println!("{table}");
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -830,6 +975,22 @@ fn main() {
             cmd_run_loop(&cli.db, *max_cycles);
             return;
         }
+        Cmd::Idea { text, tag } => {
+            cmd_idea(&cli.db, text, tag.as_deref());
+            return;
+        }
+        Cmd::Ideas => {
+            cmd_ideas(&cli.db);
+            return;
+        }
+        Cmd::Suggest { text, priority } => {
+            cmd_suggest(&cli.db, text, *priority);
+            return;
+        }
+        Cmd::Suggestions => {
+            cmd_suggestions(&cli.db);
+            return;
+        }
         _ => {}
     }
 
@@ -845,6 +1006,6 @@ fn main() {
         Cmd::Queue => cmd_queue(&conn),
         Cmd::Show { id } => cmd_show(&conn, *id),
         Cmd::Stats => cmd_stats(&conn),
-        Cmd::Tail | Cmd::RunCycle { .. } | Cmd::RunLoop { .. } => unreachable!(),
+        _ => unreachable!(),
     }
 }
