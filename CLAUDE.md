@@ -33,6 +33,12 @@ autostrix best                     # Top experiments by val_bpb
 autostrix stats                    # Summary statistics
 autostrix history                  # Full experiment history
 autostrix show <id>                # Full details for one experiment
+
+# Human-in-the-loop: steer the research
+autostrix idea "paper or concept" -t tag  # Save idea for Researcher
+autostrix ideas                           # List all saved ideas
+autostrix suggest "experiment to try" -p 20  # Queue experiment direction
+autostrix suggestions                     # List queued suggestions
 ```
 
 No unit tests or CI. Validation is purely empirical via `val_bpb`.
@@ -91,7 +97,7 @@ The system runs as a sequential pipeline of 6 specialized agents, orchestrated b
 
 | Agent | Role | Produces |
 |-------|------|----------|
-| Researcher | Brainstorm hypotheses, study past results | `HYPOTHESIS.md` |
+| Researcher | Brainstorm hypotheses, study past results + human ideas/suggestions | `HYPOTHESIS.md` |
 | Planner | Turn hypothesis into implementation plan + TOML config | `PLAN.md`, `config.toml` |
 | Engineer | Build new components (skipped if config-only) | `src/components/` code, `README.md` |
 | Trainer | Smoke test (30s) → full training (15 min) | `SMOKE_RESULTS.md`, `run.log` |
@@ -114,6 +120,15 @@ autostrix status
 autostrix best
 autostrix stats
 ```
+
+### Human-in-the-loop
+
+While the lab runs autonomously, you can steer it at any time:
+
+- **Ideas bank** (`autostrix idea`): Save papers, URLs, or concepts. The Researcher checks these before brainstorming.
+- **Suggestions** (`autostrix suggest`): Queue specific experiment directions with priority. The Researcher prioritizes pending suggestions over its own ideas.
+
+Both are stored in SQLite and survive across cycles.
 
 ### Experiment folder structure
 

@@ -30,9 +30,11 @@ grep "^peak_vram_mb:" run.log
 
 Results are automatically recorded in `experiments.db` (SQLite). Check status:
 ```bash
-autostrix status     # current + recent experiments
-autostrix best       # top experiments by val_bpb
-autostrix stats      # summary statistics
+autostrix status        # current + recent experiments
+autostrix best          # top experiments by val_bpb
+autostrix stats         # summary statistics
+autostrix ideas         # human-provided ideas, papers, URLs
+autostrix suggestions   # human-queued experiment directions
 ```
 
 ## What You CAN Change
@@ -70,14 +72,15 @@ You may also add new component variants in `src/components/` and register them.
 LOOP FOREVER:
 
 1. Review recent results: `autostrix status`
-2. Formulate a hypothesis — what change should improve val_bpb and why?
-3. Create a new TOML config with the change
-4. Git commit the config
-5. Run: `uv run -m src.experiment --config configs/<name>.toml --description "<hypothesis>" > run.log 2>&1`
-6. Check results: `grep "^val_bpb:" run.log`
-7. If val_bpb improved (lower than current best), keep the config committed
-8. If val_bpb is equal or worse, `git reset` to discard
-9. If crashed, check `tail -n 50 run.log`, attempt fix or move on
+2. Check for human input: `autostrix ideas` and `autostrix suggestions`. If there are pending suggestions, prioritize the highest-priority one. If there are ideas, incorporate relevant ones.
+3. Formulate a hypothesis — what change should improve val_bpb and why?
+4. Create a new TOML config with the change
+5. Git commit the config
+6. Run: `uv run -m src.experiment --config configs/<name>.toml --description "<hypothesis>" > run.log 2>&1`
+7. Check results: `grep "^val_bpb:" run.log`
+8. If val_bpb improved (lower than current best), keep the config committed
+9. If val_bpb is equal or worse, `git reset` to discard
+10. If crashed, check `tail -n 50 run.log`, attempt fix or move on
 
 **Timeout**: Each experiment should take ~15 minutes (+ startup overhead). Kill any run exceeding 20 minutes — treat as crash.
 

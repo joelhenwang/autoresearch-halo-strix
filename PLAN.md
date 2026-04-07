@@ -8,7 +8,7 @@ All code is written and passes non-GPU verification on the dev machine. What's d
 
 - `src/` — Full modular GPT training system (components, model, optimizer, data, eval, training loop, experiment runner)
 - `agents/` — 6 agent CLAUDE.md files with instructions, schemas, no-subagent rules
-- `autostrix/` — Rust CLI with orchestrator (`run-cycle`, `run-loop`) + monitoring commands
+- `autostrix/` — Rust CLI with orchestrator (`run-cycle`, `run-loop`), monitoring, ideas bank, and experiment suggestions
 - `configs/baseline.toml` — Default experiment config (needs `parquet_dir` set)
 - Smoke test mode (`--smoke` flag, 30s validation)
 - 200M parameter limit enforcement
@@ -118,7 +118,28 @@ Common things that may need adjustment:
 - **Agent max turns too low**: If agents run out of turns, increase in `max_turns_for_role()`
 - **System prompt file path**: Ensure `agents/<role>/CLAUDE.md` paths resolve correctly from the repo root
 
-### Step 9: Autonomous Operation
+### Step 9: Seed Ideas and Suggestions (Optional)
+
+Before going autonomous, you can pre-load the Researcher with ideas and directions:
+
+```bash
+# Save papers or concepts you want explored
+autostrix idea "Differential Transformer (ICLR 2025) - dual attention with noise cancellation" -t paper
+autostrix idea "Try mixture of SwiGLU and ReLU-squared in alternating layers" -t architecture
+autostrix idea "https://arxiv.org/abs/2501.12345 - adaptive batch sizing" -t paper
+
+# Queue specific experiments you want tried
+autostrix suggest "Test ALiBi vs RoPE on same 8-layer model for fair comparison" -p 20
+autostrix suggest "Try 12 layers with SwiGLU, reduce matrix_lr to 0.02" -p 15
+
+# Verify
+autostrix ideas
+autostrix suggestions
+```
+
+The Researcher agent checks both banks before brainstorming. Pending suggestions (especially high-priority ones) are prioritized over the agent's own ideas.
+
+### Step 10: Autonomous Operation
 
 Once a full cycle works:
 
@@ -128,6 +149,10 @@ autostrix run-loop
 
 # Or with a limit
 autostrix run-loop --max-cycles 20
+
+# You can add ideas/suggestions at any time while the loop runs:
+autostrix idea "New paper on sparse attention" -t paper
+autostrix suggest "Try GEGLU with warmup_ratio=0.1" -p 25
 ```
 
 ## Known Limitations / TODO
@@ -165,6 +190,6 @@ Key files to understand the system:
 | `src/model/gpt.py` | GPT model (assembled from components) |
 | `src/train.py` | Training loop + smoke test mode |
 | `src/experiment.py` | Experiment runner + SQLite tracking |
-| `autostrix/src/main.rs` | Rust CLI — orchestrator + monitoring |
+| `autostrix/src/main.rs` | Rust CLI — orchestrator, monitoring, ideas bank, suggestions |
 | `agents/<role>/CLAUDE.md` | Per-agent instructions (6 agents) |
 | `agents/schemas/*.md` | Handoff document templates |

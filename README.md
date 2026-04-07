@@ -28,7 +28,7 @@ Researcher → Planner → Engineer → Trainer → Reporter → Reviewer → lo
 
 Each agent runs as a **separate `claude` CLI process** (no subagents):
 
-1. **Researcher** — Studies experiment history (top results + random non-top experiments for diversity), brainstorms hypotheses, writes `HYPOTHESIS.md`
+1. **Researcher** — Studies experiment history, checks human-provided ideas and suggestions, brainstorms hypotheses, writes `HYPOTHESIS.md`
 2. **Planner** — Turns the hypothesis into a concrete implementation plan and TOML config
 3. **Engineer** — Builds new nn.Module components if needed (skipped for config-only experiments)
 4. **Trainer** — Runs a 30-second smoke test, then full 15-minute training
@@ -103,7 +103,22 @@ autostrix status          # Current + recent experiments
 autostrix best            # Top experiments by val_bpb
 autostrix stats           # Summary statistics
 autostrix history         # Full experiment table
+
+# Steer the research while it runs
+autostrix idea "Differential Transformer - uses difference of two attention patterns" -t paper
+autostrix suggest "Try 12 layers with SwiGLU and lower matrix_lr=0.02" -p 20
+autostrix ideas           # See saved ideas
+autostrix suggestions     # See queued suggestions
 ```
+
+### Steering the research
+
+The lab runs autonomously, but you can guide it at any time without stopping the loop:
+
+- **`autostrix idea <text> [-t tag]`** — Save a paper, URL, concept, or observation to the ideas bank. The Researcher reads all ideas before brainstorming. Use `-t` to tag by category (e.g., `paper`, `architecture`, `optimizer`).
+- **`autostrix suggest <text> [-p priority]`** — Queue a specific experiment direction. The Researcher prioritizes pending suggestions over its own ideas. Higher priority (default 10) gets tried sooner.
+
+Both are stored in SQLite (`experiments.db`) and persist across cycles. You can seed ideas before bed and wake up to experiments informed by your input.
 
 ## Project structure
 
