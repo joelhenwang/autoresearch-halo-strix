@@ -1,91 +1,148 @@
-# autoresearch
+# autoresearch-halo-strix
 
-![teaser](progress.png)
+A modular, autonomous AI research lab for GPT model training. A sequential pipeline of 6 specialized AI agents experiments with architecture, optimizer, and hyperparameters — overnight, while you sleep.
 
-*One day, frontier AI research used to be done by meat computers in between eating, sleeping, having other fun, and synchronizing once in a while using sound wave interconnect in the ritual of "group meeting". That era is long gone. Research is now entirely the domain of autonomous swarms of AI agents running across compute cluster megastructures in the skies. The agents claim that we are now in the 10,205th generation of the code base, in any case no one could tell if that's right or wrong as the "code" is now a self-modifying binary that has grown beyond human comprehension. This repo is the story of how it all began. -@karpathy, March 2026*.
+Forked from [@karpathy's autoresearch](https://github.com/karpathy/autoresearch), rebuilt from the ground up for modularity, AMD ROCm, and multi-agent orchestration.
 
-The idea: give an AI agent a small but real LLM training setup and let it experiment autonomously overnight. It modifies the code, trains for 5 minutes, checks if the result improved, keeps or discards, and repeats. You wake up in the morning to a log of experiments and (hopefully) a better model. The training code here is a simplified single-GPU implementation of [nanochat](https://github.com/karpathy/nanochat). The core idea is that you're not touching any of the Python files like you normally would as a researcher. Instead, you are programming the `program.md` Markdown files that provide context to the AI agents and set up your autonomous research org. The default `program.md` in this repo is intentionally kept as a bare bones baseline, though it's obvious how one would iterate on it over time to find the "research org code" that achieves the fastest research progress, how you'd add more agents to the mix, etc. A bit more context on this project is here in this [tweet](https://x.com/karpathy/status/2029701092347630069) and [this tweet](https://x.com/karpathy/status/2031135152349524125).
+## What changed from the original
+
+| | Original | This fork |
+|---|---|---|
+| **Hardware** | NVIDIA H100 (CUDA) | AMD Ryzen AI Max 395+ APU (ROCm 7.12) |
+| **Memory** | Discrete GPU VRAM | 106GB unified CPU/GPU RAM |
+| **Time budget** | 5 minutes | 15 minutes |
+| **Model code** | Single monolithic `train.py` | Modular `src/` package with swappable nn.Modules |
+| **Experiments** | Edit `train.py` directly | TOML config files in `configs/` |
+| **Agents** | 1 agent edits code | 6 specialized agents (Researcher → Planner → Engineer → Trainer → Reporter → Reviewer) |
+| **Tracking** | Manual `results.tsv` | SQLite `experiments.db` + `autostrix` Rust CLI |
+| **Tokenizer** | Custom BPE (8192 vocab) | GPT-2 tiktoken (50257 vocab) |
+| **Attention** | Flash Attention 3 (NVIDIA) | `F.scaled_dot_product_attention` (ROCm compatible) |
 
 ## How it works
 
-The repo is deliberately kept small and only really has three files that matter:
+### The AI Lab Pipeline
 
-- **`prepare.py`** — fixed constants, one-time data prep (downloads training data, trains a BPE tokenizer), and runtime utilities (dataloader, evaluation). Not modified.
-- **`train.py`** — the single file the agent edits. Contains the full GPT model, optimizer (Muon + AdamW), and training loop. Everything is fair game: architecture, hyperparameters, optimizer, batch size, etc. **This file is edited and iterated on by the agent**.
-- **`program.md`** — baseline instructions for one agent. Point your agent here and let it go. **This file is edited and iterated on by the human**.
+```
+Researcher → Planner → Engineer → Trainer → Reporter → Reviewer → loop
+```
 
-By design, training runs for a **fixed 5-minute time budget** (wall clock, excluding startup/compilation), regardless of the details of your compute. The metric is **val_bpb** (validation bits per byte) — lower is better, and vocab-size-independent so architectural changes are fairly compared.
+Each agent runs as a **separate `claude` CLI process** (no subagents):
 
-If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/status/2030720614752039185) looks pretty good for a lot more context.
+1. **Researcher** — Studies experiment history (top results + random non-top experiments for diversity), brainstorms hypotheses, writes `HYPOTHESIS.md`
+2. **Planner** — Turns the hypothesis into a concrete implementation plan and TOML config
+3. **Engineer** — Builds new nn.Module components if needed (skipped for config-only experiments)
+4. **Trainer** — Runs a 30-second smoke test, then full 15-minute training
+5. **Reporter** — Analyzes results, compares to history, writes recommendations
+6. **Reviewer** — Evaluates all agents' performance, updates their instructions if needed
+
+The `autostrix` Rust CLI orchestrates the pipeline and provides experiment monitoring.
+
+### Modular Components
+
+Architecture pieces are swappable like Legos via a registry system:
+
+| Category | Options |
+|----------|---------|
+| Attention | `causal`, `sliding_window` |
+| MLP | `relu_sq`, `swiglu`, `gelu`, `geglu` |
+| Normalization | `rmsnorm`, `layernorm` |
+| Position | `rope`, `alibi` |
+| Embedding | `standard`, `value_residual` (ResFormer) |
+| Output head | `standard`, `softcap` |
+
+Each experiment is a TOML config — no code changes needed for most experiments:
+
+```toml
+[model]
+n_layer = 8
+n_embd = 768
+block_pattern = "SSSL"
+head = "softcap"
+
+[optimizer]
+kind = "muon_adamw"
+matrix_lr = 0.04
+```
 
 ## Quick start
 
-**Requirements:** A single NVIDIA GPU (tested on H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
+**Requirements:** AMD APU or GPU with ROCm 7.12, Python 3.10+, [uv](https://docs.astral.sh/uv/), Rust toolchain.
 
 ```bash
-
-# 1. Install uv project manager (if you don't already have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 2. Install dependencies
+# 1. Install dependencies
 uv sync
 
-# 3. Download data and train tokenizer (one-time, ~2 min)
-uv run prepare.py
+# 2. Build the CLI
+cd autostrix && cargo build --release
+cd ..
 
-# 4. Manually run a single training experiment (~5 min)
-uv run train.py
+# 3. Edit the baseline config — set your parquet dataset path
+#    Edit configs/baseline.toml → parquet_dir = "path/to/your/parquets"
+
+# 4. Run a smoke test (30 seconds)
+uv run -m src.train --config configs/baseline.toml --smoke
+
+# 5. Run a single training experiment (15 min)
+uv run -m src.experiment --config configs/baseline.toml --description "baseline"
+
+# 6. Check results
+./autostrix/target/release/autostrix status
 ```
 
-If the above commands all work ok, your setup is working and you can go into autonomous research mode.
+### Running the autonomous lab
 
-## Running the agent
+```bash
+# Single cycle (all 6 agents)
+autostrix run-cycle --experiment my-experiment-name
 
-Simply spin up your Claude/Codex or whatever you want in this repo (and disable all permissions), then you can prompt something like:
+# Continuous autonomous loop
+autostrix run-loop --max-cycles 10
 
+# Monitor
+autostrix status          # Current + recent experiments
+autostrix best            # Top experiments by val_bpb
+autostrix stats           # Summary statistics
+autostrix history         # Full experiment table
 ```
-Hi have a look at program.md and let's kick off a new experiment! let's do the setup first.
-```
-
-The `program.md` file is essentially a super lightweight "skill".
 
 ## Project structure
 
 ```
-prepare.py      — constants, data prep + runtime utilities (do not modify)
-train.py        — model, optimizer, training loop (agent modifies this)
-program.md      — agent instructions
-pyproject.toml  — dependencies
+src/
+  components/           # Swappable nn.Modules (attention, MLP, norm, position, etc.)
+  model/                # Config system, TransformerBlock, GPT assembly
+  optim/                # MuonAdamW optimizer + schedules
+  data/                 # GPT-2 tokenizer, parquet loader, unified-memory dataloader
+  eval/                 # evaluate_bpb metric, MFU calculation
+  train.py              # Config-driven training loop
+  experiment.py         # Experiment runner with SQLite tracking
+
+agents/                 # Per-agent CLAUDE.md instructions
+  researcher/           # Hypothesis generation
+  planner/              # Implementation planning
+  engineer/             # Component building
+  trainer/              # Training execution
+  reporter/             # Results analysis
+  reviewer/             # Agent evaluation + self-improvement
+  schemas/              # Handoff document templates
+
+autostrix/              # Rust CLI — orchestrator + monitoring
+configs/                # TOML experiment configs
+experiments/            # Per-cycle artifacts (HYPOTHESIS.md, PLAN.md, run.log, etc.)
 ```
 
 ## Design choices
 
-- **Single file to modify.** The agent only touches `train.py`. This keeps the scope manageable and diffs reviewable.
-- **Fixed time budget.** Training always runs for exactly 5 minutes, regardless of your specific platform. This means you can expect approx 12 experiments/hour and approx 100 experiments while you sleep. There are two upsides of this design decision. First, this makes experiments directly comparable regardless of what the agent changes (model size, batch size, architecture, etc). Second, this means that autoresearch will find the most optimal model for your platform in that time budget. The downside is that your runs (and results) become not comparable to other people running on other compute platforms.
-- **Self-contained.** No external dependencies beyond PyTorch and a few small packages. No distributed training, no complex configs. One GPU, one file, one metric.
+- **Modular components.** Architecture pieces are registered nn.Modules. Swap attention, MLP, normalization, or position encoding by changing a string in the config.
+- **Config-driven experiments.** Each experiment is a TOML file, not a code change. This makes experiments reproducible, diffable, and git-trackable.
+- **Unified memory optimization.** The AMD APU shares 106GB between CPU and GPU. The entire dataset (~1.2GB tokenized) lives in RAM with zero transfer overhead.
+- **Multi-agent specialization.** Rather than one agent doing everything, six agents each focus on their strength: research, planning, engineering, training, reporting, reviewing.
+- **Self-improving system.** The Reviewer agent can update other agents' instructions based on performance patterns, creating a feedback loop that improves the lab over time.
+- **200M parameter limit.** Enforced at model construction. Keeps experiments within the compute budget of the 15-minute time window.
 
-## Platform support
+## Metric
 
-This code currently requires that you have a single NVIDIA GPU. In principle it is quite possible to support CPU, MPS and other platforms but this would also bloat the code. I'm not 100% sure that I want to take this on personally right now. People can reference (or have their agents reference) the full/parent nanochat repository that has wider platform support and shows the various solutions (e.g. a Flash Attention 3 kernels fallback implementation, generic device support, autodetection, etc.), feel free to create forks or discussions for other platforms and I'm happy to link to them here in the README in some new notable forks section or etc.
-
-Seeing as there seems to be a lot of interest in tinkering with autoresearch on much smaller compute platforms than an H100, a few extra words. If you're going to try running autoresearch on smaller computers (Macbooks etc.), I'd recommend one of the forks below. On top of this, here are some recommendations for how to tune the defaults for much smaller models for aspiring forks:
-
-1. To get half-decent results I'd use a dataset with a lot less entropy, e.g. this [TinyStories dataset](https://huggingface.co/datasets/karpathy/tinystories-gpt4-clean). These are GPT-4 generated short stories. Because the data is a lot narrower in scope, you will see reasonable results with a lot smaller models (if you try to sample from them after training).
-2. You might experiment with decreasing `vocab_size`, e.g. from 8192 down to 4096, 2048, 1024, or even - simply byte-level tokenizer with 256 possibly bytes after utf-8 encoding.
-3. In `prepare.py`, you'll want to lower `MAX_SEQ_LEN` a lot, depending on the computer even down to 256 etc. As you lower `MAX_SEQ_LEN`, you may want to experiment with increasing `DEVICE_BATCH_SIZE` in `train.py` slightly to compensate. The number of tokens per fwd/bwd pass is the product of these two.
-4. Also in `prepare.py`, you'll want to decrease `EVAL_TOKENS` so that your validation loss is evaluated on a lot less data.
-5. In `train.py`, the primary single knob that controls model complexity is the `DEPTH` (default 8, here). A lot of variables are just functions of this, so e.g. lower it down to e.g. 4.
-6. You'll want to most likely use `WINDOW_PATTERN` of just "L", because "SSSL" uses alternating banded attention pattern that may be very inefficient for you. Try it.
-7. You'll want to lower `TOTAL_BATCH_SIZE` a lot, but keep it powers of 2, e.g. down to `2**14` (~16K) or so even, hard to tell.
-
-I think these would be the reasonable hyperparameters to play with. Ask your favorite coding agent for help and copy paste them this guide, as well as the full source code.
-
-## Notable forks
-
-- [miolini/autoresearch-macos](https://github.com/miolini/autoresearch-macos) (MacOS)
-- [trevin-creator/autoresearch-mlx](https://github.com/trevin-creator/autoresearch-mlx) (MacOS)
-- [jsegov/autoresearch-win-rtx](https://github.com/jsegov/autoresearch-win-rtx) (Windows)
-- [andyluo7/autoresearch](https://github.com/andyluo7/autoresearch) (AMD)
+**val_bpb** (validation bits per byte) — lower is better. Computed as cross-entropy in nats normalized by byte counts. Vocab-size-independent, so architectural changes that affect tokenization are fairly compared.
 
 ## License
 

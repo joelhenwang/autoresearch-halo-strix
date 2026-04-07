@@ -1,23 +1,34 @@
-# Python-generated files
+# Python
 __pycache__/
 *.py[oc]
 build/
 dist/
 wheels/
 *.egg-info
-
-# Virtual environments
 .venv
+
+# Rust
+autostrix/target/
+
+# Data and caches
+*.pt
+*.npy
+datasets/
+
+# Experiment artifacts (generated at runtime)
+experiments/*/run.log
+experiments/*/SMOKE_RESULTS.md
+experiments/*/RESULTS.md
+experiments/*/REVIEW_*.md
+experiments.db
+
+# Legacy
 worktrees/
 results/
 queue/
-
-# Agent prompt files (generated per-session by launchers)
-CLAUDE.md
+dev/
+results.tsv
 AGENTS.md
 
-# Experimental code/artifacts
-dev/
-
-# Results file
-results.tsv
+# uv
+uv.lock
